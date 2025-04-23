@@ -79,3 +79,25 @@ export const deleteChat = mutation({
     return { success: true };
   },
 });
+
+// チャットのシーンデータを更新する関数
+export const updateChatSceneData = mutation({
+  args: {
+    id: v.id("chats"),
+    sceneData: v.string(),
+  },
+  handler: async (ctx, args) => {
+    // チャットの存在確認
+    const chat = await ctx.db.get(args.id);
+    if (!chat) {
+      throw new Error("Chat not found");
+    }
+
+    // シーンデータを更新
+    await ctx.db.patch(args.id, {
+      sceneData: args.sceneData,
+    });
+
+    return { success: true };
+  },
+});

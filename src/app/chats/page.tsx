@@ -2,7 +2,6 @@ import { Suspense } from "react";
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "../../../convex/_generated/api";
 import { Card } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
 import Link from "next/link";
 import ChatsList from "@/components/ChatsList";
 import NewChatButton from "@/components/NewChatButton";

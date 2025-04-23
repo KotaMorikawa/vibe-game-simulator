@@ -1,24 +1,35 @@
-// ストリームメッセージタイプの列挙型
-export enum StreamMessageType {
-  Connected = "connected",
-  Token = "token",
-  ToolStart = "tool_start",
-  ToolEnd = "tool_end",
-  Done = "done",
-  Error = "error",
-  SceneData = "scene_data", // シーンデータ用のタイプを追加
+import { Id } from "../../convex/_generated/dataModel";
+
+// SSEのフォーマット定数
+export const SSE_DATA_PREFIX = "data: " as const;
+export const SEE_DONE_MESSAGE = "[DONE]" as const;
+export const SSE_LINE_DELIMITER = "\n\n" as const;
+
+export type MessageRole = "user" | "assistant";
+
+// メッセージの型
+export interface Message {
+  role: MessageRole;
+  content: string;
 }
 
 // チャットリクエストボディの型
 export interface ChatRequestBody {
-  messages: { role: string; content: string }[];
-  newMessage: string;
-  chatId: string;
+  messages: Message[];
+  newMessage: Message;
+  chatId: Id<"chats">;
 }
 
-// SSEのフォーマット定数
-export const SSE_DATA_PREFIX = "data: ";
-export const SSE_LINE_DELIMITER = "\n\n";
+// ストリームメッセージタイプの列挙型
+export enum StreamMessageType {
+  Token = "token",
+  Error = "error",
+  Connected = "connected",
+  Done = "done",
+  ToolStart = "tool_start",
+  ToolEnd = "tool_end",
+  SceneData = "scene_data", // シーンデータ用のタイプを追加
+}
 
 // ストリームメッセージの基本インターフェース
 export interface BaseStreamMessage {

@@ -3,7 +3,6 @@
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import Link from "next/link";
-import { useState } from "react";
 import { useMutation } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { GenericId } from "convex/values";
@@ -55,9 +54,7 @@ export default function ChatsList({ chats }: ChatsListProps) {
           <Card className="p-4 hover:bg-muted/50 transition-colors cursor-pointer">
             <div className="flex justify-between items-center">
               <div>
-                <h2 className="font-semibold text-xl truncate">
-                  {chat.title}
-                </h2>
+                <h2 className="font-semibold text-xl truncate">{chat.title}</h2>
                 <p className="text-sm text-muted-foreground">
                   {formatDate(chat.createdAt)}
                 </p>

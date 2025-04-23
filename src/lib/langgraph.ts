@@ -12,47 +12,10 @@ import {
   SystemMessage,
   trimMessages,
 } from "@langchain/core/messages";
-import {
-  ChatPromptTemplate,
-  MessagesPlaceholder,
-} from "@langchain/core/prompts";
+import { ChatPromptTemplate } from "@langchain/core/prompts";
 import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
-
-// システムプロンプトの定義
-const SYSTEM_MESSAGE = `あなたは3Dゲームシーンを生成するためのアシスタントです。
-ユーザーとの会話を元に、魅力的なゲームシーンのアイデアを提案し、それに対応するシーンデータを生成します。
-シーンデータはJSONフォーマットで、以下の構造に従ってください：
-
-{
-  "scene": {
-    "name": "シーンの名前",
-    "description": "シーンの説明",
-    "objects": [
-      {
-        "type": "床や壁などのオブジェクトタイプ",
-        "position": [x, y, z],
-        "rotation": [x, y, z],
-        "scale": [x, y, z],
-        "color": "カラーコード",
-        "properties": {
-          // オブジェクト特有のプロパティ
-        }
-      }
-      // 他のオブジェクト...
-    ],
-    "lighting": {
-      "type": "ambient/directional/point",
-      "intensity": 0.5 // 0-1の範囲
-    },
-    "camera": {
-      "position": [x, y, z],
-      "lookAt": [x, y, z]
-    }
-  }
-}
-
-シーンデータはJSON形式で提供し、それを前後に\`\`\`json\`\`\`で囲んでください。
-ユーザーの入力に基づいて、創造的かつ視覚的に魅力的なシーンを生成してください。`;
+import { HarmCategory, HarmBlockThreshold } from "@google/generative-ai";
+import SYSTEM_MESSAGE from "../../constants/systemMessage";
 
 // 会話履歴を管理するためのトリマー
 const trimmer = trimMessages({
@@ -68,7 +31,7 @@ const trimmer = trimMessages({
       return acc + content.length / 4; // おおよそ4文字で1トークンと仮定
     }, 0);
   },
-  includeSystem: true,
+  includeSystem: false, // システムメッセージを含めない（重要な変更）
   allowPartial: false,
   startOn: "human",
 });
@@ -85,6 +48,13 @@ export const extractSceneData = (text: string): string | null => {
       return match[1];
     } catch (e) {
       console.error("Invalid JSON in AI response:", e);
+      // 無効なJSONの場合、修正を試みる
+      try {
+        const fixedJson = attemptToFixJson(match[1]);
+        if (fixedJson) return fixedJson;
+      } catch (fixError) {
+        console.error("Failed to fix JSON:", fixError);
+      }
       return null;
     }
   }
@@ -92,14 +62,58 @@ export const extractSceneData = (text: string): string | null => {
   return null;
 };
 
+// JSONの修正を試みる関数
+function attemptToFixJson(jsonStr: string): string | null {
+  try {
+    // 基本的な修正を試みる
+    let fixedJson = jsonStr
+      .replace(/(['"])?([a-zA-Z0-9_]+)(['"])?:/g, '"$2":') // プロパティ名をダブルクォートで囲む
+      .replace(/'/g, '"'); // シングルクォートをダブルクォートに置換
+
+    // 末尾のカンマを修正
+    fixedJson = fixedJson.replace(/,(\s*[}\]])/g, "$1");
+
+    // 修正したJSONを検証
+    JSON.parse(fixedJson);
+    return fixedJson;
+  } catch {
+    return null;
+  }
+}
+
+// AIの応答を処理して、シーンデータを含むコンテンツを返す
+export const formatAIResponseWithSceneData = (
+  content: string,
+  sceneData: string | null
+): string => {
+  if (!sceneData) return content;
+
+  // JSONブロックがすでに含まれているかチェック
+  const hasJsonBlock = /```json\n[\s\S]*?```/.test(content);
+
+  if (hasJsonBlock) {
+    // JSONブロックがすでに含まれている場合はそのまま返す
+    return content;
+  } else {
+    // JSONブロックを追加
+    return `${content}\n\n\`\`\`json\n${sceneData}\n\`\`\``;
+  }
+};
+
 // モデルの初期化
-export const initializeModel = (apiKey: string) => {
+export const initializeModel = () => {
   const model = new ChatGoogleGenerativeAI({
-    apiKey,
     model: "gemini-2.0-flash",
+    apiKey: process.env.GOOGLE_GEMINI_API_KEY,
     maxOutputTokens: 2048,
     temperature: 0.7,
-    streaming: true,
+    // 構造化出力のためのオプション設定
+    safetySettings: [
+      {
+        category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+        threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+      },
+    ],
   });
 
   return model;
@@ -115,8 +129,8 @@ function shouldContinue(state: typeof MessagesAnnotation.State) {
 }
 
 // ワークフローの作成
-const createWorkflow = (apiKey: string) => {
-  const model = initializeModel(apiKey);
+const createWorkflow = (lastSceneData?: string | null) => {
+  const model = initializeModel();
 
   // StateGraphの作成とノードの追加
   const stateGraph = new StateGraph(MessagesAnnotation)
@@ -124,31 +138,67 @@ const createWorkflow = (apiKey: string) => {
       // システムメッセージを設定
       const systemContent = SYSTEM_MESSAGE;
 
-      // プロンプトテンプレートの作成
-      const promptTemplate = ChatPromptTemplate.fromMessages([
-        new SystemMessage(systemContent),
-        new MessagesPlaceholder("messages"),
-      ]);
+      // まず、入力メッセージからSystemMessageを完全に取り除く
+      const filteredMessages = state.messages.filter(
+        (msg) => !(msg instanceof SystemMessage)
+      );
 
       // メッセージの履歴を管理（トリミング）
-      const trimmedMessages = await trimmer.invoke(state.messages);
+      const trimmedMessages = await trimmer.invoke(filteredMessages);
 
-      // プロンプトのフォーマット
-      const prompt = await promptTemplate.invoke({ messages: trimmedMessages });
+      // プロンプトテンプレートの作成 - システムメッセージを1つにまとめる
+      let messages: BaseMessage[] = [];
+
+      // 全てのシステムメッセージを1つに統合する
+      let systemMessageContent =
+        systemContent +
+        "\n\n最後に必ず3DシーンのためのJSON形式のデータを```json```ブロックで提供してください。既存のオブジェクトは保持したまま変更や追加を行ってください。";
+
+      // 現在のシーンオブジェクトがある場合、それも同じシステムメッセージに統合
+      if (lastSceneData) {
+        systemMessageContent += `\n\n以下が現在のシーンデータです。ユーザーが特に削除を指示しない限り、これらのオブジェクトを保持してください：\n\n\`\`\`json\n${lastSceneData}\n\`\`\``;
+      }
+
+      // 統合した1つのシステムメッセージを最初に追加
+      messages.push(new SystemMessage(systemMessageContent));
+
+      // その後にユーザーとAIのメッセージを追加
+      messages = [...messages, ...trimmedMessages];
 
       // モデルからの応答を取得
-      const response = await model.invoke(prompt);
+      const response = await model.invoke(messages);
 
       // シーンデータを抽出
-      const content = response.content as string;
-      const sceneData = extractSceneData(content);
+      let content = response.content as string;
+      let sceneData = extractSceneData(content);
 
-      // 応答を返す（カスタムメタデータ付き）
+      // シーンデータが見つからない場合、フォローアップリクエストを送信
+      if (!sceneData) {
+        console.log(
+          "シーンデータが見つかりません。フォローアップリクエストを送信します。"
+        );
+        const followUpPrompt = ChatPromptTemplate.fromMessages([
+          new SystemMessage(
+            "前回の応答からシーンデータを抽出できませんでした。以下の応答を3Dシーン用のJSONデータに変換してください。必ず```json```ブロックで囲んでください。",
+            { caches_control: { type: "ephemeral" } }
+          ),
+          new HumanMessage(content),
+        ]);
+
+        const formattedFollowUpPrompt = await followUpPrompt.invoke({});
+        const followUpResponse = await model.invoke(formattedFollowUpPrompt);
+        const followUpContent = followUpResponse.content as string;
+        sceneData = extractSceneData(followUpContent);
+
+        // フォローアップで取得できた場合、元の内容に追加
+        if (sceneData) {
+          content = formatAIResponseWithSceneData(content, sceneData);
+        }
+      }
+
+      // 応答を返す
       const aiMessage = new AIMessage({
-        content,
-        additional_kwargs: {
-          scene_data: sceneData,
-        },
+        content: content,
       });
 
       return {
@@ -171,15 +221,18 @@ const addCachingHeaders = (messages: BaseMessage[]): BaseMessage[] => {
   // ヘルパー関数：キャッシュ制御を追加
   const addCache = (message: BaseMessage) => {
     if (typeof message.content === "string") {
-      message.additional_kwargs = {
-        ...message.additional_kwargs,
-        cache_control: { type: "ephemeral" },
-      };
+      message.content = [
+        {
+          type: "text",
+          text: message.content,
+          cache_control: { type: "ephemeral" },
+        },
+      ];
     }
   };
 
   // 最後のメッセージをキャッシュ
-  addCache(cachedMessages[cachedMessages.length - 1]);
+  addCache(cachedMessages.at(-1)!);
 
   // 2回目のヒューマンメッセージを探してキャッシュ
   let humanCount = 0;
@@ -200,13 +253,18 @@ const addCachingHeaders = (messages: BaseMessage[]): BaseMessage[] => {
 export const submitQuestion = async (
   messages: BaseMessage[],
   chatId: string,
-  apiKey: string
+  lastSceneData?: string | null
 ) => {
-  // キャッシュヘッダーを追加
-  const cachedMessages = addCachingHeaders(messages);
+  // メッセージからシステムメッセージを除外（メッセージ順序の問題を回避）
+  const filteredMessages = messages.filter(
+    (msg) => !(msg instanceof SystemMessage)
+  );
 
-  // ワークフローの作成
-  const workflow = createWorkflow(apiKey);
+  // キャッシュヘッダーを追加
+  const cachedMessages = addCachingHeaders(filteredMessages);
+
+  // ワークフローの作成（最新のシーンデータを渡す）
+  const workflow = createWorkflow(lastSceneData);
 
   // チェックポインターの作成（メモリセーバー）
   const checkpointer = new MemorySaver();
