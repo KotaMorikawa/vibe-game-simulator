@@ -25,8 +25,7 @@ export default function ChatPagePresentational({
   initialChat,
   initialMessages,
 }: ChatPageClientProps) {
-  // リアルタイム更新を使用せず、初期データを使用
-  const [chat] = useState<Chat>(initialChat);
+  const chat = initialChat;
   const [messages, setMessages] = useState<Message[]>(initialMessages || []);
 
   // 状態管理
