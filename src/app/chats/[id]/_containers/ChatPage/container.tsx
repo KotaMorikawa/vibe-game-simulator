@@ -1,16 +1,16 @@
 import { Id } from "../../../../../../convex/_generated/dataModel";
 import ChatPagePresentational from "./presentational";
 import { notFound } from "next/navigation";
-import { ConvexHttpClient } from "convex/browser";
 import { api } from "../../../../../../convex/_generated/api";
-
-// Convexクライアントの初期化
-const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL || "";
-const convex = new ConvexHttpClient(convexUrl);
+import { getConvexClient } from "@/lib/convex";
 
 // データをサーバー側で取得する関数
 async function getChatAndMessages(id: Id<"chats">) {
   try {
+    // Convexクライアントの初期化
+    const convex = getConvexClient();
+
+    // チャットとメッセージを取得
     const chat = await convex.query(api.chats.getChat, { id });
     if (!chat) {
       return { chat: null, messages: [] };

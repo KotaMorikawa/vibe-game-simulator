@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import { ConvexHttpClient } from "convex/browser";
 import { api } from "../../../../convex/_generated/api";
 import { submitQuestion, extractSceneData } from "@/lib/langgraph";
 import {
@@ -11,6 +10,7 @@ import {
   Message,
 } from "@/lib/types";
 import { HumanMessage, AIMessage } from "@langchain/core/messages";
+import { getConvexClient } from "@/lib/convex";
 
 // 環境変数からAPIキーを取得
 const apiKey = process.env.GOOGLE_GEMINI_API_KEY;
@@ -38,7 +38,7 @@ export async function POST(req: Request) {
       (await req.json()) as ChatRequestBody;
 
     // Convexクライアントの初期化
-    const convex = new ConvexHttpClient(convexUrl || "");
+    const convex = getConvexClient();
 
     // Create stream with large queue strategy for better performance
     const stream = new TransformStream({}, { highWaterMark: 1024 });

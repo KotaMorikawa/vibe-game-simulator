@@ -1,19 +1,18 @@
 import { Suspense } from "react";
-import { ConvexHttpClient } from "convex/browser";
 import { api } from "../../../convex/_generated/api";
 import { Card } from "@/components/ui/card";
 import Link from "next/link";
 import ChatsList from "@/components/ChatsList";
 import NewChatButton from "@/components/NewChatButton";
-
-// Convexクライアントの初期化
-const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL || "";
-const convex = new ConvexHttpClient(convexUrl);
+import { getConvexClient } from "@/lib/convex";
 
 // データをサーバー側で取得する関数
 async function getChats() {
   try {
-    const chats = await convex.query(api.chats.listChats);
+    // Convexクライアントの初期化
+    const convex = getConvexClient();
+    // チャットを取得
+    const chats = await convex.query(api.chats.listChats, {});
     return chats || [];
   } catch (error) {
     console.error("チャットの取得に失敗しました:", error);

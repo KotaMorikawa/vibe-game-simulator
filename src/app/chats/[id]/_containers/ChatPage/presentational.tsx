@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect } from "react";
 import { Message } from "../../_components/MessageList";
 import { SceneObject } from "@/components/PreviewArea";
 import { Card } from "@/components/ui/card";
@@ -10,9 +10,9 @@ import MessageInput from "../../_components/MessageInput";
 import ScenePreview, { SceneDataViewer } from "../../_components/ScenePreview";
 import { Id } from "../../../../../../convex/_generated/dataModel";
 import { Chat } from "../../_lib/types";
-import { useQuery } from "convex/react";
 import { api } from "../../../../../../convex/_generated/api";
 import { convertSceneData } from "@/lib/scene";
+import { getConvexClient } from "@/lib/convex";
 
 interface ChatPageClientProps {
   chatId: Id<"chats">;
@@ -25,11 +25,9 @@ export default function ChatPagePresentational({
   initialChat,
   initialMessages,
 }: ChatPageClientProps) {
-  // リアルタイム更新のためにConvexクエリも使用
-  const chat = useQuery(api.chats.getChat, { id: chatId }) || initialChat;
-  const rawMessages =
-    useQuery(api.messages.listMessages, { chatId }) || initialMessages;
-  const messages = useMemo(() => rawMessages || [], [rawMessages]);
+  // リアルタイム更新を使用せず、初期データを使用
+  const [chat] = useState<Chat>(initialChat);
+  const [messages, setMessages] = useState<Message[]>(initialMessages || []);
 
   // 状態管理
   const [formattedMessages, setFormattedMessages] = useState<Message[]>([]);
@@ -114,8 +112,15 @@ export default function ChatPagePresentational({
     // エラー状態をリセット
     setError(null);
 
-    // 新しいメッセージを追加
-    setFormattedMessages((prev) => [...prev, userMessage]);
+    // 新しいユーザーメッセージを追加（楽観的更新）
+    const newUserMessage = {
+      ...userMessage,
+      _id: `temp_${Date.now()}`,
+      chatId,
+      createdAt: Date.now(),
+    };
+
+    setFormattedMessages((prev) => [...prev, newUserMessage as Message]);
     setIsLoading(true);
 
     try {
@@ -153,6 +158,7 @@ export default function ChatPagePresentational({
       let aiResponseText = "";
       let bufferText = "";
       let completionData: { chatId: string; messageId: string } | null = null;
+      let fullMessageData = null;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -196,6 +202,26 @@ export default function ChatPagePresentational({
               if (dataMatch && dataMatch[1]) {
                 completionData = JSON.parse(dataMatch[1]);
                 console.log("完了イベント:", completionData);
+                fullMessageData = {
+                  _id: completionData?.messageId || `temp_${Date.now()}`,
+                  chatId,
+                  content: aiResponseText,
+                  role: "assistant",
+                  createdAt: Date.now(),
+                  sceneData: JSON.stringify(sceneObjects),
+                };
+
+                // 応答が完了したら、実際のメッセージをDBに保存
+                try {
+                  const convex = getConvexClient();
+                  await convex.mutation(api.messages.storeAIMessage, {
+                    chatId,
+                    content: aiResponseText,
+                    sceneData: JSON.stringify(sceneObjects),
+                  });
+                } catch (storeError) {
+                  console.error("メッセージの保存エラー:", storeError);
+                }
               }
             } catch (e) {
               console.error("完了イベント処理エラー:", e);
@@ -214,6 +240,22 @@ export default function ChatPagePresentational({
               return updatedMessages;
             });
           }
+        }
+      }
+
+      // 応答が完了した後、メッセージ配列を更新（楽観的更新から確定版に）
+      if (fullMessageData) {
+        setMessages((prev) => [...prev, fullMessageData as Message]);
+
+        // ユーザーメッセージも保存（APIがユーザーメッセージを保存しない場合）
+        try {
+          const convex = getConvexClient();
+          await convex.mutation(api.messages.sendMessage, {
+            chatId,
+            content: userMessage.content,
+          });
+        } catch (error) {
+          console.error("ユーザーメッセージの保存エラー:", error);
         }
       }
     } catch (error) {
